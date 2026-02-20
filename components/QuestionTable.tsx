@@ -6,11 +6,21 @@ import { COMMON_KNOWLEDGE_POINTS } from '../constants';
 
 interface Props {
   questions: QuestionItem[];
+  selectedQuestionIds: string[];
   onUpdate: (id: string, field: keyof QuestionItem, value: string) => void;
-  onBatchUpdate: (startIdx: number, endIdx: number, field: keyof QuestionItem, value: string) => void;
+  onBatchUpdateByIds: (ids: string[], field: keyof QuestionItem, value: string) => void;
+  onToggleSelectQuestion: (id: string) => void;
+  onSetVisibleSelection: (checked: boolean) => void;
 }
 
-export const QuestionTable: React.FC<Props> = ({ questions, onUpdate, onBatchUpdate }) => {
+export const QuestionTable: React.FC<Props> = ({
+  questions,
+  selectedQuestionIds,
+  onUpdate,
+  onBatchUpdateByIds,
+  onToggleSelectQuestion,
+  onSetVisibleSelection
+}) => {
   const [batchStart, setBatchStart] = useState<string>('1');
   const [batchEnd, setBatchEnd] = useState<string>(questions.length.toString());
   const [batchSource, setBatchSource] = useState<string>(new Date().toISOString().split('T')[0]);
@@ -22,13 +32,17 @@ export const QuestionTable: React.FC<Props> = ({ questions, onUpdate, onBatchUpd
   }, [questions]);
 
   const datalistId = "knowledge-points-list";
+  const selectedSet = useMemo(() => new Set(selectedQuestionIds), [selectedQuestionIds]);
+  const selectedVisibleCount = questions.filter(q => selectedSet.has(q.id)).length;
+  const allVisibleSelected = questions.length > 0 && selectedVisibleCount === questions.length;
 
   const handleApplyBatch = () => {
-    const start = parseInt(batchStart);
-    const end = parseInt(batchEnd);
-    if (!isNaN(start) && !isNaN(end)) {
-      onBatchUpdate(start, end, 'source', batchSource);
-    }
+    if (questions.length === 0) return;
+    const start = Math.max(1, parseInt(batchStart) || 1);
+    const end = Math.min(questions.length, parseInt(batchEnd) || questions.length);
+    const [safeStart, safeEnd] = start <= end ? [start, end] : [end, start];
+    const targetIds = questions.slice(safeStart - 1, safeEnd).map(q => q.id);
+    if (targetIds.length > 0) onBatchUpdateByIds(targetIds, 'source', batchSource);
   };
 
   return (
@@ -45,6 +59,16 @@ export const QuestionTable: React.FC<Props> = ({ questions, onUpdate, onBatchUpd
 
         {/* Batch Update Section */}
         <div className="flex flex-wrap items-center gap-3 p-2 bg-blue-50/50 rounded-lg border border-blue-100">
+          <label className="flex items-center gap-2 text-xs text-blue-700 font-semibold">
+            <input
+              type="checkbox"
+              checked={allVisibleSelected}
+              onChange={(e) => onSetVisibleSelection(e.target.checked)}
+              className="w-4 h-4 rounded text-blue-600 border-blue-300"
+            />
+            全选当前列表
+          </label>
+          <span className="text-xs text-blue-600">已选 {selectedVisibleCount}/{questions.length}</span>
           <div className="flex items-center gap-2 text-xs font-bold text-blue-700 uppercase">
             <CheckCheck size={14} /> 批量修改来源:
           </div>
@@ -95,6 +119,9 @@ export const QuestionTable: React.FC<Props> = ({ questions, onUpdate, onBatchUpd
         <table className="w-full text-left border-collapse">
           <thead className="sticky top-0 bg-gray-50 z-10 shadow-sm">
             <tr>
+              <th className="px-3 py-3 text-xs font-bold text-gray-400 uppercase tracking-wider border-b w-14 text-center bg-gray-100/50">
+                组卷
+              </th>
               <th className="px-3 py-3 text-xs font-bold text-gray-400 uppercase tracking-wider border-b w-12 text-center bg-gray-100/50">
                 <div className="flex items-center justify-center gap-1"><ListOrdered size={12}/>#</div>
               </th>
@@ -115,6 +142,15 @@ export const QuestionTable: React.FC<Props> = ({ questions, onUpdate, onBatchUpd
           <tbody className="divide-y divide-gray-100">
             {questions.map((q, idx) => (
               <tr key={q.id} className="hover:bg-blue-50/20 transition-colors group">
+                <td className="px-3 py-3 align-top text-center bg-gray-50/30">
+                  <input
+                    type="checkbox"
+                    checked={selectedSet.has(q.id)}
+                    onChange={() => onToggleSelectQuestion(q.id)}
+                    className="w-4 h-4 rounded text-blue-600 border-gray-300"
+                    title="选择该题用于组卷"
+                  />
+                </td>
                 <td className="px-3 py-3 align-top text-center text-xs font-mono text-gray-400 bg-gray-50/30">
                   {idx + 1}
                 </td>

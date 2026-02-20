@@ -6,8 +6,7 @@ import {
   KeyboardSensor, 
   PointerSensor, 
   useSensor, 
-  useSensors,
-  DragEndEvent 
+  useSensors
 } from '@dnd-kit/core';
 import { 
   arrayMove, 
@@ -38,7 +37,8 @@ import {
   Type as TypeIcon,
   Info,
   Sparkles,
-  ChevronRight
+  ChevronRight,
+  Filter
 } from 'lucide-react';
 
 import { UploadedFile, ProcessingStatus, HistoryRecord, QuestionItem, StyleSettings } from './types';
@@ -104,6 +104,8 @@ export default function App() {
   const [isImporting, setIsImporting] = useState(false);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [rotation, setRotation] = useState(0);
+  const [selectedQuestionIds, setSelectedQuestionIds] = useState<string[]>([]);
+  const [knowledgeFilter, setKnowledgeFilter] = useState<string>('全部');
 
   useEffect(() => {
     const saved = localStorage.getItem('math_latex_history_v2');
@@ -138,8 +140,45 @@ export default function App() {
     });
   }, []);
 
+  const selectedIdSet = useMemo(() => new Set(selectedQuestionIds), [selectedQuestionIds]);
+  const allQuestionIdSet = useMemo(() => new Set(questions.map(q => q.id)), [questions]);
+  const availableKnowledgePoints = useMemo(() => {
+    const points = questions
+      .map(q => q.knowledgePoint?.trim())
+      .filter((point): point is string => Boolean(point && point.length > 0));
+    return ['全部', ...Array.from(new Set(points)).sort()];
+  }, [questions]);
+
+  const filteredQuestions = useMemo(() => {
+    if (knowledgeFilter === '全部') return questions;
+    return questions.filter(q => (q.knowledgePoint || '未分类') === knowledgeFilter);
+  }, [questions, knowledgeFilter]);
+
+  const selectedQuestions = useMemo(
+    () => questions.filter(q => selectedIdSet.has(q.id)),
+    [questions, selectedIdSet]
+  );
+
+  useEffect(() => {
+    if (questions.length === 0) {
+      setSelectedQuestionIds([]);
+      setKnowledgeFilter('全部');
+      return;
+    }
+    setSelectedQuestionIds(prev => {
+      const valid = prev.filter(id => allQuestionIdSet.has(id));
+      return valid.length > 0 ? valid : questions.map(q => q.id);
+    });
+  }, [questions, allQuestionIdSet]);
+
+  useEffect(() => {
+    if (!availableKnowledgePoints.includes(knowledgeFilter)) {
+      setKnowledgeFilter('全部');
+    }
+  }, [availableKnowledgePoints, knowledgeFilter]);
+
   const generatedLatex = useMemo(() => {
-    if (questions.length === 0) return '';
+    if (selectedQuestions.length === 0) return '';
 
     const today = new Date();
     const dateStr = `${today.getFullYear()}年${today.getMonth() + 1}月${today.getDate()}日`;
@@ -187,18 +226,18 @@ export default function App() {
     };
 
     if (sortByType) {
-      const types = Array.from(new Set(questions.map(q => q.type)));
+      const types = Array.from(new Set(selectedQuestions.map(q => q.type)));
       types.forEach(type => {
         body += `\\section*{${type}}\n`;
         body += `\\begin{enumerate}[label=\\arabic*.]\n`;
-        questions.filter(q => q.type === type).forEach(q => {
+        selectedQuestions.filter(q => q.type === type).forEach(q => {
           body += formatQuestion(q);
         });
         body += `\\end{enumerate}\n\n`;
       });
     } else {
       body += `\\begin{enumerate}[label=\\arabic*.]\n`;
-      questions.forEach(q => {
+      selectedQuestions.forEach(q => {
         body += formatQuestion(q);
       });
       body += `\\end{enumerate}\n`;
@@ -206,17 +245,44 @@ export default function App() {
 
     body += `\n\\end{document}`;
     return customizedPreamble + body;
-  }, [questions, sortByType, keepOriginalNumbers, style]);
+  }, [selectedQuestions, sortByType, keepOriginalNumbers, style]);
 
   const handleUpdateQuestion = (id: string, field: keyof QuestionItem, value: string) => {
     setQuestions(prev => prev.map(q => q.id === id ? { ...q, [field]: value } : q));
   };
 
-  const handleBatchUpdate = (startIdx: number, endIdx: number, field: keyof QuestionItem, value: string) => {
-    setQuestions(prev => prev.map((q, idx) => {
-      const sequence = idx + 1;
-      return (sequence >= startIdx && sequence <= endIdx) ? { ...q, [field]: value } : q;
-    }));
+  const handleBatchUpdateByIds = (ids: string[], field: keyof QuestionItem, value: string) => {
+    const idSet = new Set(ids);
+    setQuestions(prev => prev.map(q => (idSet.has(q.id) ? { ...q, [field]: value } : q)));
+  };
+
+  const handleToggleSelectQuestion = (id: string) => {
+    setSelectedQuestionIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
+  };
+
+  const handleSetVisibleSelection = (checked: boolean) => {
+    const visibleIds = filteredQuestions.map(q => q.id);
+    if (checked) {
+      setSelectedQuestionIds(prev => Array.from(new Set([...prev, ...visibleIds])));
+      return;
+    }
+    setSelectedQuestionIds(prev => prev.filter(id => !visibleIds.includes(id)));
+  };
+
+  const handleInvertVisibleSelection = () => {
+    const visibleIds = filteredQuestions.map(q => q.id);
+    setSelectedQuestionIds(prev => {
+      const prevSet = new Set(prev);
+      const nextSet = new Set(prev);
+      visibleIds.forEach(id => {
+        if (prevSet.has(id)) {
+          nextSet.delete(id);
+        } else {
+          nextSet.add(id);
+        }
+      });
+      return Array.from(nextSet).filter(id => allQuestionIdSet.has(id));
+    });
   };
 
   const handleImportLatex = async () => {
@@ -225,7 +291,12 @@ export default function App() {
     setErrorMessage('');
     try {
       const parsed = await parseLatexToQuestions(importText);
-      setQuestions(prev => appendMode ? [...prev, ...parsed] : parsed);
+      let nextQuestions: QuestionItem[] = [];
+      setQuestions(prev => {
+        nextQuestions = appendMode ? [...prev, ...parsed] : parsed;
+        return nextQuestions;
+      });
+      setSelectedQuestionIds(nextQuestions.map(q => q.id));
       setShowImportModal(false);
       setImportText('');
     } catch (e: any) {
@@ -253,6 +324,7 @@ export default function App() {
         finalQuestions = extractedQuestions;
       }
       setQuestions(finalQuestions);
+      setSelectedQuestionIds(finalQuestions.map(q => q.id));
       setStatus(ProcessingStatus.SUCCESS);
       saveToHistory({
         id: uid(),
@@ -369,7 +441,19 @@ export default function App() {
         </div>
       )}
 
-      <HistoryPanel isOpen={showHistory} onClose={() => setShowHistory(false)} history={history} onRestore={(r) => { setQuestions(r.questions); setStatus(ProcessingStatus.SUCCESS); setShowHistory(false); }} onClear={() => setHistory([])} onDelete={(id) => setHistory(h => h.filter(i => i.id !== id))} />
+      <HistoryPanel
+        isOpen={showHistory}
+        onClose={() => setShowHistory(false)}
+        history={history}
+        onRestore={(r) => {
+          setQuestions(r.questions);
+          setSelectedQuestionIds(r.questions.map(q => q.id));
+          setStatus(ProcessingStatus.SUCCESS);
+          setShowHistory(false);
+        }}
+        onClear={() => setHistory([])}
+        onDelete={(id) => setHistory(h => h.filter(i => i.id !== id))}
+      />
 
       <header className="bg-white border-b border-gray-200 sticky top-0 z-30 px-4 h-16 flex items-center justify-between shadow-sm">
         <div className="flex items-center gap-2">
@@ -524,9 +608,48 @@ export default function App() {
         </div>
 
         {/* Middle Column */}
-        <div className="lg:col-span-5 h-[calc(100vh-10rem)]">
+        <div className="lg:col-span-5 h-[calc(100vh-10rem)] flex flex-col gap-3">
+          {questions.length > 0 && (
+            <div className="bg-white border border-gray-200 rounded-xl px-4 py-3 flex flex-wrap items-center gap-3 shadow-sm">
+              <div className="flex items-center gap-2">
+                <Filter size={14} className="text-blue-600" />
+                <span className="text-xs font-bold text-gray-500 uppercase">知识点筛选</span>
+                <select
+                  value={knowledgeFilter}
+                  onChange={(e) => setKnowledgeFilter(e.target.value)}
+                  className="px-2 py-1 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                >
+                  {availableKnowledgePoints.map(point => (
+                    <option key={point} value={point}>{point}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-center gap-2 text-xs text-gray-500">
+                <span>当前显示 {filteredQuestions.length} 题</span>
+                <span>已选 {selectedQuestions.length}/{questions.length}</span>
+              </div>
+              <div className="ml-auto flex items-center gap-2">
+                <button onClick={() => handleSetVisibleSelection(true)} className="px-2.5 py-1.5 text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-100 rounded-lg hover:bg-blue-100">
+                  全选当前
+                </button>
+                <button onClick={handleInvertVisibleSelection} className="px-2.5 py-1.5 text-xs font-semibold text-gray-700 bg-gray-100 border border-gray-200 rounded-lg hover:bg-gray-200">
+                  反选当前
+                </button>
+                <button onClick={() => setSelectedQuestionIds([])} className="px-2.5 py-1.5 text-xs font-semibold text-red-700 bg-red-50 border border-red-100 rounded-lg hover:bg-red-100">
+                  清空已选
+                </button>
+              </div>
+            </div>
+          )}
           {questions.length > 0 ? (
-            <QuestionTable questions={questions} onUpdate={handleUpdateQuestion} onBatchUpdate={handleBatchUpdate} />
+            <QuestionTable
+              questions={filteredQuestions}
+              selectedQuestionIds={selectedQuestionIds}
+              onUpdate={handleUpdateQuestion}
+              onBatchUpdateByIds={handleBatchUpdateByIds}
+              onToggleSelectQuestion={handleToggleSelectQuestion}
+              onSetVisibleSelection={handleSetVisibleSelection}
+            />
           ) : (
             <div className="h-full border border-gray-200 border-dashed rounded-xl bg-gray-50 flex flex-col items-center justify-center text-gray-400 p-8 text-center">
               <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mb-4">
@@ -548,9 +671,12 @@ export default function App() {
             <LatexOutput latexCode={generatedLatex} />
           ) : (
             <div className="h-full bg-white border border-gray-200 rounded-xl flex items-center justify-center">
-              <div className="flex flex-col items-center gap-2 opacity-10">
-                 <FileText size={64} />
-                 <p className="font-mono text-xs">TEX PREVIEW</p>
+              <div className="flex flex-col items-center gap-2 text-gray-400 text-center px-6">
+                 <FileText size={64} className="opacity-10" />
+                 <p className="font-mono text-xs opacity-50">TEX PREVIEW</p>
+                 {questions.length > 0 && selectedQuestions.length === 0 && (
+                  <p className="text-xs text-red-500 font-medium">请先勾选至少一道题再导出。</p>
+                 )}
               </div>
             </div>
           )}
